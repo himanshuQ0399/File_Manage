@@ -6,13 +6,14 @@
 #include <chrono>
 #include <random>
 #include <iostream>
-#include<future>
+#include <future>
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 const std::string FileManager::STORAGE_DIR = "chunks";
 const std::string FileManager::METADATA_DIR = "metadata";
 
+// ThreadPool implementation remains unchanged
 ThreadPool::ThreadPool(size_t threads) : stop(false) {
     for (size_t i = 0; i < threads; ++i) {
         workers.emplace_back([this] {
@@ -59,12 +60,14 @@ FileManager::FileManager() : thread_pool(std::thread::hardware_concurrency()) {
 
 FileManager::~FileManager() {}
 
-std::string FileManager::generate_unique_id() {
-    auto now = std::chrono::system_clock::now().time_since_epoch().count();
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(1000, 9999);
-    return std::to_string(now) + "_" + std::to_string(dis(gen));
+std::string FileManager::generate_content_id(const std::vector<std::string>& chunk_hashes) {
+    // Combine all chunk hashes into a single string
+    std::string combined;
+    for (const auto& hash : chunk_hashes) {
+        combined += hash;
+    }
+    // Calculate SHA-256 hash of the combined string
+    return calculate_sha256(std::vector<char>(combined.begin(), combined.end()));
 }
 
 void FileManager::rebuild_chunk_ref_counts() {
@@ -192,9 +195,6 @@ bool FileManager::save_chunk(const std::string& hash, const std::vector<char>& c
 
 bool FileManager::upload_file(const std::string& filename, const std::vector<char>& content, const std::string& content_type, std::string& out_metadata_id) {
     try {
-        std::string metadata_id = generate_unique_id();
-        out_metadata_id = metadata_id;
-
         json metadata;
         metadata["filename"] = filename;
         metadata["size"] = content.size();
@@ -226,13 +226,27 @@ bool FileManager::upload_file(const std::string& filename, const std::vector<cha
             offset += CHUNK_SIZE;
         }
 
+        // Generate CID based on chunk hashes
+        std::string metadata_id = generate_content_id(chunk_hashes);
+        out_metadata_id = metadata_id;
+
+        // Check if file with same CID already exists
+        json index = load_index();
+        if (index.contains(filename) && std::find(index[filename].begin(), index[filename].end(), metadata_id) != index[filename].end()) {
+            // File already exists, increment ref counts for chunks
+            std::lock_guard<std::mutex> lock(chunk_mutex);
+            for (const auto& hash : chunk_hashes) {
+                chunk_ref_count[hash]++;
+            }
+            return true; // No need to save metadata again
+        }
+
         metadata["chunks"] = chunk_hashes;
         fs::path metadata_path = fs::path(METADATA_DIR) / (filename + "_" + metadata_id + ".json");
         std::ofstream metadata_file(metadata_path);
         if (!metadata_file) return false;
         metadata_file << metadata.dump(2);
 
-        json index = load_index();
         if (!index.contains(filename)) index[filename] = json::array();
         index[filename].push_back(metadata_id);
         if (!save_index(index)) return false;
@@ -304,7 +318,7 @@ bool FileManager::delete_file(const std::string& filename, const std::string& me
             std::ifstream metadata_file(metadata_path);
             if (!metadata_file.is_open()) return false;
             metadata = json::parse(metadata_file);
-        } // File closes here when metadata_file goes out of scope
+        }
 
         {
             std::lock_guard<std::mutex> lock(chunk_mutex);
@@ -343,7 +357,6 @@ bool FileManager::update_file(const std::string& filename, const std::vector<cha
             old_metadata = json::parse(metadata_file);
         }
 
-        
         json new_metadata;
         new_metadata["filename"] = filename;
         new_metadata["size"] = new_content.size();
@@ -375,6 +388,23 @@ bool FileManager::update_file(const std::string& filename, const std::vector<cha
             offset += CHUNK_SIZE;
         }
 
+        // Generate new CID for updated file
+        std::string new_metadata_id = generate_content_id(new_hashes);
+
+        // Remove old metadata file if new CID is different
+        if (new_metadata_id != target_metadata_id) {
+            fs::remove(metadata_path);
+            json index = load_index();
+            if (index.contains(filename)) {
+                auto& ids = index[filename];
+                ids.erase(std::remove(ids.begin(), ids.end(), target_metadata_id), ids.end());
+                if (!index[filename].contains(new_metadata_id)) {
+                    index[filename].push_back(new_metadata_id);
+                }
+                save_index(index);
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lock(chunk_mutex);
             for (const auto& hash : old_metadata["chunks"].get<std::vector<std::string>>()) {
@@ -386,7 +416,8 @@ bool FileManager::update_file(const std::string& filename, const std::vector<cha
         }
 
         new_metadata["chunks"] = new_hashes;
-        std::ofstream new_metadata_file(metadata_path);
+        fs::path new_metadata_path = fs::path(METADATA_DIR) / (filename + "_" + new_metadata_id + ".json");
+        std::ofstream new_metadata_file(new_metadata_path);
         if (!new_metadata_file) return false;
         new_metadata_file << new_metadata.dump(2);
         return true;
