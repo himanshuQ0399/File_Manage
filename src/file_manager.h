@@ -45,7 +45,7 @@ private:
     std::string calculate_sha256(const std::vector<char>& buffer);
     bool save_chunk(const std::string& hash, const std::vector<char>& content);
     bool retrieve_chunk(const std::string& hash, std::vector<char>& content);
-    std::string generate_unique_id();
+    std::string generate_content_id(const std::vector<std::string>& chunk_hashes); // New CID function
     nlohmann::json load_index();
     bool save_index(const nlohmann::json& index);
 };
