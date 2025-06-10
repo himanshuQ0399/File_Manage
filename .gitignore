@@ -1,2 +1,27 @@
-vcpkg/
+# Build directories and artifacts
+build/
+chunker-service/build/
+store-service/build/
+
+# Compiled binaries
+*.o
+*.exe
+*.out
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Sensitive files
+server.crt
+server.key
+
+# VSCode settings
 .vscode/
+
+# Miscellaneous
+*.log
+*.swp
+*.swo

@@ -1,3 +1,0 @@
-C:/Users/Qikfox/Documents/file_parallelism/build/CMakeFiles/file_manager.dir
-C:/Users/Qikfox/Documents/file_parallelism/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/Qikfox/Documents/file_parallelism/build/CMakeFiles/ZERO_CHECK.dir
